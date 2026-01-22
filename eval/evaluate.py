@@ -1,5 +1,6 @@
 import os
 import time
+import sys
 import math
 import json
 from collections import defaultdict
@@ -13,13 +14,13 @@ import compressai
 from compressai.zoo import load_state_dict  
 from compressai.models.stf import SymmetricalTransFormer as STF
 import matplotlib.pyplot as plt
-from plot import plot_psnr_bpp
-
+sys.path.append('/home/mmproj01/repos/ALICE')
+from utils.LoadModel import Ready_Model
+from .plot import plot_psnr_bpp
 torch.backends.cudnn.deterministic = True
 torch.set_num_threads(1)
 
 IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".ppm", ".bmp", ".pgm", ".tif", ".tiff", ".webp")
-
 
 def collect_images(rootpath: str):
     return [
@@ -37,66 +38,6 @@ def psnr(a: torch.Tensor, b: torch.Tensor) -> float:
 def read_image(filepath: str) -> torch.Tensor:
     img = Image.open(filepath).convert("RGB")
     return transforms.ToTensor()(img)
-
-
-def _extract_state_dict(ckpt_obj):
-    if not isinstance(ckpt_obj, dict):
-        return ckpt_obj
-    for k in ("state_dict", "model_state_dict", "model", "net", "weights"):
-        if k in ckpt_obj and isinstance(ckpt_obj[k], dict):
-            return ckpt_obj[k]
-    return ckpt_obj
-
-
-def _strip_prefix(state, prefix: str):
-    if any(k.startswith(prefix) for k in state.keys()):
-        return {k[len(prefix):]: v for k, v in state.items()}
-    return state
-
-
-def load_stf_checkpoint(checkpoint_path: str, device: torch.device):
-    ckpt = torch.load(checkpoint_path, map_location="cpu")
-    state = _extract_state_dict(ckpt)
-
-    state = _strip_prefix(state, "module.")
-    state = _strip_prefix(state, "model.")
-    state = _strip_prefix(state, "net.")
-
-    try:
-        state = load_state_dict(state)
-    except Exception:
-        pass
-
-    model = STF(
-        pretrain_img_size=256,
-        patch_size=2,
-        in_chans=3,
-        embed_dim=48,
-        window_size=4,
-    )
-
-    missing, unexpected = torch.nn.Module.load_state_dict(model, state, strict=False)
-
-    if hasattr(model, "update"):
-        try:
-            model.update(force=True)
-        except TypeError:
-            model.update()
-
-    model = model.to(device).eval()
-
-    if len(missing) > 50 or len(unexpected) > 50:
-        print("\n[ERROR] Checkpoint/model mismatch:", checkpoint_path)
-        print("Missing:", len(missing), "Unexpected:", len(unexpected))
-        print("Missing sample:", missing[:20])
-        print("Unexpected sample:", unexpected[:20])
-        raise SystemExit(
-            "Your STF constructor args (embed_dim/window_size/etc.) likely do NOT match the checkpoint.\n"
-            "If these are official STF checkpoints, we need the exact STF config used in training."
-        )
-
-    return model
-
 
 @torch.no_grad()
 def inference(model, x: torch.Tensor):
@@ -151,46 +92,30 @@ def eval_model(model, filepaths):
 
     return dict(metrics)
 
-
-def main():
-
+def main(model=None,rate=0.0483):  
     dataset = Path("~/datasets/kodak").expanduser()
-    ckpt_dir = Path("~/checkpoints").expanduser()
-    runs = {
-        0.0018: "stf_0018.pth.tar",
-        0.0035: "stf_0035.pth.tar",
-        0.0067: "stf_0067.pth.tar",
-        0.0130: "stf_013.pth.tar",
-        0.0250: "stf_025.pth.tar",
-        0.0483: "stf_0483.pth.tar",
-    }
-    compressai.set_entropy_coder(compressai.available_entropy_coders()[0])
-
     if not dataset.is_dir():
         raise SystemExit(f"Dataset folder not found: {dataset}")
-    if not ckpt_dir.is_dir():
-        raise SystemExit(f"Checkpoint folder not found: {ckpt_dir}")
-
-
     filepaths = collect_images(dataset)
     if not filepaths:
         raise SystemExit("No images found in dataset folder.")
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    results = {}
-    for lam in sorted(runs.keys()):
-        ckpt_path = os.path.join(ckpt_dir, runs[lam])
-        if not os.path.isfile(ckpt_path):
-            raise SystemExit(f"Missing checkpoint file: {ckpt_path}")
-        print(f"\nEvaluating λ={lam}  ({ckpt_path})")
-        model = load_stf_checkpoint(ckpt_path, device)
+    
+    if model is not None:
+        # Evaluate the provided model
         metrics = eval_model(model, filepaths)
-        results[lam] = metrics
         print(metrics)
+        results = {rate: metrics}
+    else:
+        runs = [0.0018,0.0035,0.0067,0.0130,0.0250,0.0483]
+        results = {}
+        for lam in sorted(runs):
+            model = Ready_Model(lam)
+            metrics = eval_model(model,filepaths)
+            results[lam] = metrics
+            print(f"Rate {lam}: {metrics}")
     lams = sorted(results.keys())
     json_out = {
-        "dataset": dataset.name,    
+        "dataset": dataset.name,
         "model": "STF",
         "lambdas": lams,
         "metrics": {
@@ -201,16 +126,16 @@ def main():
             "decoding_time": [results[lam]["decoding_time"] for lam in lams],
         },
     }
-
-    out_json = "metrics_results.json"
+    results_dir = os.path.join('/home/mmproj01/repos/ALICE', 'results')
+    os.makedirs(results_dir, exist_ok=True)
+    
+    out_json = os.path.join(results_dir, "metrics_results.json")
     with open(out_json, "w") as f:
         json.dump(json_out, f, indent=2)
 
     print(f"\nSaved: {out_json}")
-    plot_psnr_bpp()
 
-    
-
+    # plot_psnr_bpp()
 
 if __name__ == "__main__":
     main()

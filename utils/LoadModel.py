@@ -1,20 +1,16 @@
 import os
 import time
 import math
-import json
 from collections import defaultdict
 from pathlib import Path
 import torch
-import torch.nn.functional as F
-from PIL import Image
-from torchvision import transforms
-from pytorch_msssim import ms_ssim
 import compressai
 from compressai.zoo import load_state_dict  
 from compressai.models.stf import SymmetricalTransFormer as STF
-import matplotlib.pyplot as plt
-from ..eval.evaluate import eval_model
-from ..eval.plot import plot_psnr_bpp
+torch.backends.cudnn.deterministic = True
+torch.set_num_threads(1)
+
+
 def _extract_state_dict(ckpt_obj):
     if not isinstance(ckpt_obj, dict):
         return ckpt_obj
@@ -70,19 +66,33 @@ def load_stf_checkpoint(checkpoint_path: str, device: torch.device):
             "Your STF constructor args (embed_dim/window_size/etc.) likely do NOT match the checkpoint.\n"
             "If these are official STF checkpoints, we need the exact STF config used in training."
         )
+
     return model
-def main():
+
+def Ready_Model(rate):  
     ckpt_dir = Path("~/checkpoints").expanduser()
-    runs = {0.0483: "stf_0483.pth.tar",}
+    runs = {
+            0.0018: "stf_0018.pth.tar",
+            0.0035: "stf_0035.pth.tar",
+            0.0067: "stf_0067.pth.tar",
+            0.0130: "stf_013.pth.tar",
+            0.0250: "stf_025.pth.tar",
+            0.0483: "stf_0483.pth.tar",
+        }    
     compressai.set_entropy_coder(compressai.available_entropy_coders()[0])
     if not ckpt_dir.is_dir():
         raise SystemExit(f"Checkpoint folder not found: {ckpt_dir}")
-    ckpt_path = os.path.join(ckpt_dir, runs)
+    if rate not in runs:
+        raise SystemExit(f"Rate {rate} not found in runs dict.")
+    
+    ckpt_filename = runs[rate]
+    ckpt_path = os.path.join(ckpt_dir, ckpt_filename)
     if not os.path.isfile(ckpt_path):
         raise SystemExit(f"Missing checkpoint file: {ckpt_path}")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = load_stf_checkpoint(ckpt_path, device)
-            metrics = eval_model(model, filepaths)
-    print(metrics)
+    return model 
 
 
-    
+def Ready_Models(rates):
+    return [Ready_Model(rate) for rate in rates]
