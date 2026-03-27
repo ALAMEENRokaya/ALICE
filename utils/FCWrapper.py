@@ -12,20 +12,19 @@ class FCWrapper(nn.Module):
         self.alpha=alpha
         nn.init.normal_(self.wb.weight,0,1)
         nn.init.zeros_(self.wb.bias)
-        device = FC.weight.device
+        device=FC.weight.device
         self.wa = self.wa.to(device)
+        self.scale = alpha/r 
         self.wb = self.wb.to(device)
     def forward(self,x):
-        adapter=self.alpha*self.wb(self.wa(x))
+        adapter=self.scale*self.wb(self.wa(x))
         adapted_output=adapter+self.fc(x)
         return adapted_output
     
 def wrap_fc_layers(model, alpha=8, r=8):
     for name, module in model.named_modules():
-        if isinstance(module, nn.Linear):
-            parent = model
-            attr_chain = name.split('.')
-            for attr in attr_chain[:-1]:
-                parent = getattr(parent, attr)
-            setattr(parent, attr_chain[-1], FCWrapper(module, alpha, r))
+        if ('layers' in name or 'syn_layers' in name) and type(module).__name__=='Mlp':
+            module.fc1 = FCWrapper(module.fc1, alpha, r)
+            module.fc2 = FCWrapper(module.fc2, alpha, r)           
     return model
+

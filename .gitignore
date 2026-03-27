@@ -8,3 +8,9 @@ __pycache__/
 
 # Ignore VS Code settings
 .vscode/
+
+# Ignore wandb logs and runs
+wandb/
+
+# Ignore model checkpoints (common patterns)
+checkpointset/

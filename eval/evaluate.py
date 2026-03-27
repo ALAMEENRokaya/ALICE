@@ -16,7 +16,7 @@ from compressai.models.stf import SymmetricalTransFormer as STF
 import matplotlib.pyplot as plt
 sys.path.append('/home/mmproj01/repos/ALICE')
 from utils.LoadModel import Ready_Model
-from .plot import plot_psnr_bpp
+#from .plot import plot_psnr_bpp
 torch.backends.cudnn.deterministic = True
 torch.set_num_threads(1)
 
@@ -43,7 +43,6 @@ def read_image(filepath: str) -> torch.Tensor:
 def inference(model, x: torch.Tensor):
     x = x.unsqueeze(0)
     h, w = x.size(2), x.size(3)
-
     p = 64
     new_h = (h + p - 1) // p * p
     new_w = (w + p - 1) // p * p
@@ -53,14 +52,13 @@ def inference(model, x: torch.Tensor):
     pb = new_h - h - pt
 
     x_padded = F.pad(x, (pl, pr, pt, pb), mode="constant", value=0)
-
-    t0 = time.time()
+    t0 =time.time()
     out_enc = model.compress(x_padded)
-    enc_time = time.time() - t0
+    enc_time=time.time()-t0
 
-    t1 = time.time()
-    out_dec = model.decompress(out_enc["strings"], out_enc["shape"])
-    dec_time = time.time() - t1
+    t1=time.time()
+    out_dec=model.decompress(out_enc["strings"], out_enc["shape"])
+    dec_time=time.time() - t1
 
     x_hat = out_dec["x_hat"]
     x_hat = F.pad(x_hat, (-pl, -pr, -pt, -pb))
@@ -135,7 +133,7 @@ def main(model=None,rate=0.0483):
 
     print(f"\nSaved: {out_json}")
 
-    # plot_psnr_bpp()
+    #plot_psnr_bpp()
 
 if __name__ == "__main__":
     main()
