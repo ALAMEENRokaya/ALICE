@@ -5,39 +5,34 @@ from collections import defaultdict
 from pathlib import Path
 import torch
 import compressai
-from compressai.zoo import load_state_dict  
+from compressai.zoo import load_state_dict
 from compressai.models.stf import SymmetricalTransFormer as STF
 torch.backends.cudnn.deterministic = True
 torch.set_num_threads(1)
 
+import torch
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utils.Masked import wrapmask_fc_layers
 
-def _extract_state_dict(ckpt_obj):
-    if not isinstance(ckpt_obj, dict):
-        return ckpt_obj
-    for k in ("state_dict", "model_state_dict", "model", "net", "weights"):
-        if k in ckpt_obj and isinstance(ckpt_obj[k], dict):
-            return ckpt_obj[k]
-    return ckpt_obj
+# Entropy buffers are recomputed by model.update(); strip them before loading
+_ENTROPY_BUFFERS = {
+    "entropy_bottleneck._offset",
+    "entropy_bottleneck._quantized_cdf",
+    "entropy_bottleneck._cdf_length",
+    "gaussian_conditional._offset",
+    "gaussian_conditional._quantized_cdf",
+    "gaussian_conditional._cdf_length",
+    "gaussian_conditional.scale_table",
+}
 
+def load_stf_checkpoint(path: str, device: torch.device) -> "STF":
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    state = ckpt["state_dict"]
 
-def _strip_prefix(state, prefix: str):
-    if any(k.startswith(prefix) for k in state.keys()):
-        return {k[len(prefix):]: v for k, v in state.items()}
-    return state
-
-
-def load_stf_checkpoint(checkpoint_path: str, device: torch.device):
-    ckpt = torch.load(checkpoint_path, map_location="cpu")
-    state = _extract_state_dict(ckpt)
-
-    state = _strip_prefix(state, "module.")
-    state = _strip_prefix(state, "model.")
-    state = _strip_prefix(state, "net.")
-
-    try:
-        state = load_state_dict(state)
-    except Exception:
-        pass
+    # remove DDP/DataParallel prefix
+    if all(k.startswith("module.") for k in state.keys()):
+        state = {k[len("module."):]: v for k, v in state.items()}
 
     model = STF(
         pretrain_img_size=256,
@@ -47,25 +42,18 @@ def load_stf_checkpoint(checkpoint_path: str, device: torch.device):
         window_size=4,
     )
 
-    missing, unexpected = torch.nn.Module.load_state_dict(model, state, strict=False)
+    # detect masked+adapter architecture (batata checkpoints)
+    is_masked = any("mlp.fc1.mask" in k for k in state.keys())
+    if is_masked:
+        model = wrapmask_fc_layers(model, alpha=8, r=8, num_bitrates=6)
 
-    if hasattr(model, "update"):
-        try:
-            model.update(force=True)
-        except TypeError:
-            model.update()
+    # entropy buffers (shape depends on trained quantiles) are recomputed by update()
+    state = {k: v for k, v in state.items() if k not in _ENTROPY_BUFFERS}
+    torch.nn.Module.load_state_dict(model, state, strict=False)
 
+    # IMPORTANT: initialize entropy model CDF tables
+    model.update(force=True)
     model = model.to(device).eval()
-
-    if len(missing) > 50 or len(unexpected) > 50:
-        print("\n[ERROR] Checkpoint/model mismatch:", checkpoint_path)
-        print("Missing:", len(missing), "Unexpected:", len(unexpected))
-        print("Missing sample:", missing[:20])
-        print("Unexpected sample:", unexpected[:20])
-        raise SystemExit(
-            "Your STF constructor args (embed_dim/window_size/etc.) likely do NOT match the checkpoint.\n"
-            "If these are official STF checkpoints, we need the exact STF config used in training."
-        )
 
     return model
 
@@ -79,7 +67,8 @@ def Ready_Model(rate):
             0.0250: "stf_025.pth.tar",
             0.0483: "stf_0483.pth.tar",
         }    
-    compressai.set_entropy_coder(compressai.available_entropy_coders()[0])
+    
+    #compressai.set_entropy_coder(compressai.available_entropy_coders()[0])
     if not ckpt_dir.is_dir():
         raise SystemExit(f"Checkpoint folder not found: {ckpt_dir}")
     if rate not in runs:
